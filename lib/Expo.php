@@ -2,7 +2,9 @@
 
 namespace ExponentPhpSDK;
 
+use ExponentPhpSDK\Dto\Token;
 use ExponentPhpSDK\Exceptions\ExpoException;
+use ExponentPhpSDK\Exceptions\TooManyExperienceIds;
 use ExponentPhpSDK\Exceptions\UnexpectedResponseException;
 use ExponentPhpSDK\Repositories\ExpoFileDriver;
 
@@ -26,8 +28,8 @@ class Expo
      * @var ExpoRegistrar
      */
     private $registrar;
-    
-    /** 
+
+    /**
      * @var string|null
      */
     private $accessToken = null;
@@ -61,9 +63,12 @@ class Expo
      *
      * @return string
      */
-    public function subscribe($interest, $token)
-    {
-        return $this->registrar->registerInterest($interest, $token);
+    public function subscribe(
+        $interest,
+        $token,
+        $experienceId = null,
+    ) {
+        return $this->registrar->registerInterest($interest, $token, $experienceId);
     }
 
     /**
@@ -78,11 +83,12 @@ class Expo
     {
         return $this->registrar->removeInterest($interest, $token);
     }
-    
+
     /**
      * @param string|null $accessToken
      */
-    public function setAccessToken(string $accessToken = null) {
+    public function setAccessToken(string $accessToken = null)
+    {
         $this->accessToken = $accessToken;
     }
 
@@ -100,8 +106,6 @@ class Expo
      */
     public function notify(array $interests, array $data, $debug = false)
     {
-        $postData = [];
-
         if (count($interests) == 0) {
             throw new ExpoException('Interests array must not be empty.');
         }
@@ -109,22 +113,45 @@ class Expo
         // Gets the expo tokens for the interests
         $recipients = $this->registrar->getInterests($interests);
 
-        foreach ($recipients as $token) {
-            $postData[] = $data + ['to' => $token];
-        }
+        $recipients = $this->groupRecipients($recipients);
 
-        $ch = $this->prepareCurl();
+        foreach ($recipients as $group) {
+            $postData = [];
 
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
+            foreach ($group as $token) {
+                $postData[] = $data + ['to' => $token];
+            }
 
-        $response = $this->executeCurl($ch);
+            $ch = $this->prepareCurl();
 
-        // If the notification failed completely, throw an exception with the details
-        if ($debug && $this->failedCompletely($response, $recipients)) {
-            throw ExpoException::failedCompletelyException($response);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
+
+            $response = $this->executeCurl($ch);
+
+            // If the notification failed completely, throw an exception with the details
+            if ($debug && $this->failedCompletely($response, $recipients)) {
+                throw ExpoException::failedCompletelyException($response);
+            }
         }
 
         return $response;
+    }
+
+    /**
+     * Groups recipients by experience id
+     *
+     * @param array<Token> $recipients
+     * @return array<string,array<string>>
+     */
+    private function groupRecipients(array $recipients): array
+    {
+        $result = [];
+
+        foreach ($recipients as $recipient) {
+            $result[$recipient->getExperienceId()][] = $recipient->getToken();
+        }
+
+        return $result;
     }
 
     /**
@@ -161,8 +188,8 @@ class Expo
         $ch = $this->getCurl();
 
         $headers = [
-                'accept: application/json',
-                'content-type: application/json',
+            'accept: application/json',
+            'content-type: application/json',
         ];
 
         if ($this->accessToken) {
@@ -185,7 +212,8 @@ class Expo
      *
      * @return null|resource
      */
-    private function handleWithUnexpectedResponse($response) {
+    private function handleWithUnexpectedResponse($response)
+    {
         if (is_array($response) && isset($response['body'])) {
             $errors = json_decode($response['body'])->errors ?? [];
 
@@ -234,6 +262,15 @@ class Expo
         $responseData = json_decode($response['body'], true)['data'] ?? null;
 
         if (! is_array($responseData)) {
+            $body = json_decode($response['body'] ?? '{}', true);
+
+            if (($body['errors'][0]['code'] ?? '') === 'PUSH_TOO_MANY_EXPERIENCE_IDS') {
+                throw new TooManyExperienceIds(
+                    'Too many experience ids',
+                    $body['errors'][0]['details']
+                );
+            }
+
             throw new UnexpectedResponseException(
                 $this->handleWithUnexpectedResponse($response)
             );

@@ -1,4 +1,5 @@
 <?php
+
 namespace ExponentPhpSDK;
 
 use ExponentPhpSDK\Exceptions\ExpoRegistrarException;
@@ -32,13 +33,16 @@ class ExpoRegistrar
      *
      * @return string
      */
-    public function registerInterest($interest, $token)
-    {
-        if (! $this->isValidExpoPushToken($token)) {
+    public function registerInterest(
+        $interest,
+        $token,
+        $experienceId = null
+    ) {
+        if (!$this->isValidExpoPushToken($token)) {
             throw ExpoRegistrarException::invalidToken();
         }
 
-        $stored = $this->repository->store($interest, $token);
+        $stored = $this->repository->store($interest, $token, $experienceId);
 
         if (!$stored) {
             throw ExpoRegistrarException::couldNotRegisterInterest();
@@ -69,32 +73,16 @@ class ExpoRegistrar
     /**
      * Gets the tokens of the interests
      *
-     * @param array $interests
-     *
      * @throws ExpoRegistrarException
      *
-     * @return array
+     * @return array<Token>
      */
     public function getInterests(array $interests): array
     {
         $tokens = [];
 
         foreach ($interests as $interest) {
-            $retrieved = $this->repository->retrieve($interest);
-
-            if (!is_null($retrieved)) {
-                if(is_string($retrieved)) {
-                    $tokens[] = $retrieved;
-                }
-
-                if(is_array($retrieved)) {
-                    foreach($retrieved as $token) {
-                        if(is_string($token)) {
-                            $tokens[] = $token;
-                        }
-                    }
-                }
-            }
+            $tokens = [...$tokens, ...$this->repository->retrieve($interest)];
         }
 
         if (empty($tokens)) {
